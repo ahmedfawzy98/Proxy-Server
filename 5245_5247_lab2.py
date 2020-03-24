@@ -79,8 +79,9 @@ class HttpRequestInfo(object):
         print(f"Client:", self.client_address_info)
         print(f"Method:", self.method)
         print(f"Host:", self.requested_host)
+        print(f"Path:", self.requested_path)
         print(f"Port:", self.requested_port)
-        print("Headers:\n", "\n".join(self.headers))
+        print("Headers:\n", self.headers)
 
 
 class HttpErrorResponse(object):
@@ -131,8 +132,7 @@ def entry_point(proxy_port_number):
     server = setup_proxy_as_server(proxy_port_number)
     client, address = connect_to_client(server)
     http_raw_data = receive_from_client(server, client, address)
-    # http_request_pipeline(address, http_raw_data)
-    # print(http_raw_data.decode('utf-8').split('\r\n'))
+    http_request_pipeline(address, http_raw_data)
     return None
 
 
@@ -215,11 +215,12 @@ def parse_http_request(source_addr, http_raw_data) -> HttpRequestInfo:
 
     it does NOT validate the HTTP request.
     """
-    http_request = http_raw_data.decode('utf-8').split('\r\n')
+    http_request = http_raw_data.decode('utf-8').split('\r\n')[:-2]
     method, host, path = parse_request_line(http_request[0])
     headers, host = parse_headers(http_request[1:], host)
     host, port = parse_port(host)
     ret = HttpRequestInfo(source_addr, method, host, port, path, headers)
+    ret.display()
     return ret
 
 def parse_request_line(request_line):
@@ -230,7 +231,7 @@ def parse_request_line(request_line):
         url_or_path = url_or_path.lstrip('http://')
         url_or_path = url_or_path.split('/')
         host = url_or_path[0]
-        path = '/'.join(url_or_path[1])
+        path = f'/{url_or_path[1]}'
     else:
         host = ''
         path = request_line[1]
@@ -239,7 +240,9 @@ def parse_request_line(request_line):
 def parse_headers(request_headers, host):
     headers = []
     for header in request_headers:
+        # print(f'Header: {header}')
         header = header.split(': ')
+        # print(f'Header splitted: {header}')
         headers.append((header[0], header[1]))
         if header[0] == 'Host': host = header[1]
     return headers, host
@@ -247,8 +250,9 @@ def parse_headers(request_headers, host):
 def parse_port(host_string):
     host_parts = host_string.split(':')
     host = host_parts[0]
-    port = host_parts[1]
-    if not port: port = '80'
+    port = '80'
+    if len(host_parts) != 1:
+        port = host_parts[1]
     return host, port
     
 
