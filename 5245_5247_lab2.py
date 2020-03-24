@@ -57,13 +57,8 @@ class HttpRequestInfo(object):
         [header]\r\n
         [headers..]\r\n
         \r\n
-
-        You still need to convert this string
-        to byte array before sending it to the socket,
-        keeping it as a string in this stage is to ease
-        debugging and testing.
         """
-
+        # http_binary = self.method + b' ' + 
         print("*" * 50)
         print("[to_http_string] Implement me!")
         print("*" * 50)
@@ -94,13 +89,10 @@ class HttpErrorResponse(object):
         self.message = message
 
     def to_http_string(self):
-        """ Same as above """
-        pass
+        response_binary = b'HTTP/1.0 ' + self.code + b' ' + self.message + b'\r\n'
+        return response_binary.decode('UTF-8')
 
     def to_byte_array(self, http_string):
-        """
-        Converts an HTTP string to a byte array.
-        """
         return bytes(http_string, "UTF-8")
 
     def display(self):
@@ -132,7 +124,15 @@ def entry_point(proxy_port_number):
     server = setup_proxy_as_server(proxy_port_number)
     client, address = connect_to_client(server)
     http_raw_data = receive_from_client(server, client, address)
-    http_request_pipeline(address, http_raw_data)
+    pipelined = http_request_pipeline(address, http_raw_data)
+    if isinstance(pipelined, HttpErrorResponse):
+        response_string = pipelined.to_http_string()
+        print(response_string)
+        client.send(pipelined.to_byte_array(response_string))
+        server.close()
+    else:
+        pass
+
     return None
 
 
@@ -168,7 +168,6 @@ def receive_from_client(server, client, address):
         data += client.recv(1024)
         if data.endswith(b'\r\n\r\n'): break
     print(f'Received HTTP_Request = {data}')
-    server.close()
     return data
 
 
@@ -200,13 +199,25 @@ def http_request_pipeline(source_addr, http_raw_data):
     """
     # Parse HTTP request
     parsed = parse_http_request(source_addr, http_raw_data)
-
+    request_status = check_http_request_validity(parsed)
+    if is_valid_request(request_status):
+        return parsed # sanitize here
+    else:
+        return appropriate_response(request_status)
     # Validate, sanitize, return Http object.
-    print("*" * 50)
-    print("[http_request_pipeline] Implement me!")
-    print("*" * 50)
-    return None
+    # print("*" * 50)
+    # print("[http_request_pipeline] Implement me!")
+    # print("*" * 50)
+    # return None
 
+def is_valid_request(request_state):
+    return request_state == HttpRequestState.GOOD
+
+def appropriate_response(request_status):
+    if request_status == HttpRequestState.INVALID_INPUT:
+        return HttpErrorResponse(b'400', b'Bad Request')
+    elif request_status == HttpRequestState.NOT_SUPPORTED:
+        return HttpErrorResponse(b'501', b'Not Implemented')
 
 def parse_http_request(source_addr, http_raw_data) -> HttpRequestInfo:
     """
@@ -215,25 +226,25 @@ def parse_http_request(source_addr, http_raw_data) -> HttpRequestInfo:
 
     it does NOT validate the HTTP request.
     """
-    http_request = http_raw_data.decode('utf-8').split('\r\n')[:-2]
+    http_request = http_raw_data.split(b'\r\n')[:-2]
     method, host, path = parse_request_line(http_request[0])
     headers, host = parse_headers(http_request[1:], host)
     host, port = parse_port(host)
     ret = HttpRequestInfo(source_addr, method, host, port, path, headers)
-    ret.display()
+    # ret.display()
     return ret
 
 def parse_request_line(request_line):
-    request_line = request_line.split(' ')
+    request_line = request_line.split(b' ')
     method = request_line[0]
     url_or_path = request_line[1]
-    if url_or_path.startswith('http'):
-        url_or_path = url_or_path.lstrip('http://')
-        url_or_path = url_or_path.split('/')
+    if url_or_path.startswith(b'http'):
+        url_or_path = url_or_path.lstrip(b'http://')
+        url_or_path = url_or_path.split(b'/')
         host = url_or_path[0]
-        path = f'/{url_or_path[1]}'
+        path = b'/' + url_or_path[1]
     else:
-        host = ''
+        host = b''
         path = request_line[1]
     return method, host, path
 
@@ -241,34 +252,30 @@ def parse_headers(request_headers, host):
     headers = []
     for header in request_headers:
         # print(f'Header: {header}')
-        header = header.split(': ')
+        header = header.split(b': ')
         # print(f'Header splitted: {header}')
-        headers.append((header[0], header[1]))
-        if header[0] == 'Host': host = header[1]
+        if header[0] == b'Host':
+            headers.insert(0, (header[0], header[1]))
+        else:
+            headers.append((header[0], header[1]))
     return headers, host
 
 def parse_port(host_string):
-    host_parts = host_string.split(':')
+    host_parts = host_string.split(b':')
     host = host_parts[0]
-    port = '80'
+    port = b'80'
     if len(host_parts) != 1:
         port = host_parts[1]
     return host, port
-    
 
 def check_http_request_validity(http_request_info: HttpRequestInfo) -> HttpRequestState:
-    """
-    Checks if an HTTP response is valid
-
-    returns:
-    One of values in HttpRequestState
-    """
-    print("*" * 50)
-    print("[check_http_request_validity] Implement me!")
-    print("*" * 50)
-    # return HttpRequestState.GOOD (for example)
-    return HttpRequestState.PLACEHOLDER
-
+    not_supported = [b'PUT', b'PATCH', b'DELETE', b'HEAD', b'POST', b'CONNECT', b'OPTIONS', b'TRACE']
+    if http_request_info.method == b'GET':
+        return HttpRequestState.GOOD
+    elif http_request_info.method in not_supported:
+        return HttpRequestState.NOT_SUPPORTED
+    else:
+        return HttpRequestState.INVALID_INPUT
 
 def sanitize_http_request(request_info: HttpRequestInfo) -> HttpRequestInfo:
     """
