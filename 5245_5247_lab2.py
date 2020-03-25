@@ -84,89 +84,69 @@ class HttpRequestState(enum.Enum):
 
 
 def entry_point(proxy_port_number):
-    proxy = setup_proxy_as_server(proxy_port_number)
-    client, address = connect_to_client(proxy)
-    http_raw_data = receive_from_client(proxy, client, address)
+    proxy_as_server = setup_proxy_as_server(proxy_port_number)
+    client, address = connect_to_client(proxy_as_server)
+    http_raw_data = receive_from_client(client)
+    print(f'Received request = {http_raw_data}')
     pipelined = http_request_pipeline(address, http_raw_data)
     if is_error_response(pipelined):
         response_string = pipelined.to_http_string()
-        print(response_string)
         client.send(pipelined.to_byte_array(response_string))
-        # server.close()
     else:
-        print('Not Erro response')
-        connect_to_remote(proxy)
+        print(f'Host_name: {pipelined.requested_host}')
+        print(pipelined.to_http_string())
+        proxy_as_client = setup_proxy_as_client()
+        remote_address = get_remote_address(pipelined)
+        connect_to_remote(proxy_as_client, remote_address)
         http_string = pipelined.to_http_string()
-        send_to_remote(pipelined.to_byte_array(http_string))
-        receive_from_remote(proxy)
-        client.send()
+        send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
+        response = receive_from_remote(proxy_as_client)
+        print('Receieved from remote')
+        client.send(response)
 
-    return None
+    # return None // IS it good to put (return None) or just remove it and put return type beside the definition of method or not??????
 
-def connect_to_remote(proxy, pipelined):
-    remote_address = (socket.gethostbyname(pipelined.requested_host), pipelined.requested_port)
-    proxy.connect(address)
+def setup_proxy_as_client():
+    return socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+def get_remote_address(pipelined):
+    return (socket.gethostbyname(pipelined.requested_host), int(pipelined.requested_port))
+
+def connect_to_remote(proxy, remote_address):
+    proxy.connect(remote_address)
+    print('Connected to remote')
+
+def send_to_remote(proxy, http_request, remote_address):
+    proxy.sendto(http_request, remote_address)
+    print('Sent to remote')
+
+def receive_from_remote(proxy):
+    return proxy.recvfrom(1024)[0]
 
 def is_error_response(pipelined):
     return isinstance(pipelined, HttpErrorResponse)
 
-def setup_sockets(proxy_port_number):
-    """
-    Socket logic MUST NOT be written in the any
-    class. Classes know nothing about the sockets.
-
-    But feel free to add your own classes/functions.
-
-    Feel free to delete this function.
-    """
-    print("Starting HTTP proxy on port:", proxy_port_number)
-
 def setup_proxy_as_server(proxy_port_number):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    address = ('127.0.0.1', int(proxy_port_number))
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(address)
-    s.listen(20)
-    return s
+    proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    address = (socket.gethostbyname('localhost'), int(proxy_port_number))
+    proxy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    proxy.bind(address)
+    proxy.listen(20)
+    return proxy
 
-def connect_to_client(server):
-    client, address = server.accept()
+def connect_to_client(proxy):
+    client, address = proxy.accept()
     print(f"Connection from {address} has been established!")
     return client, address
 
-def receive_from_client(server, client, address):
+def receive_from_client(client):
     data = b""
     while True:
         data += client.recv(1024)
         if data.endswith(b'\r\n\r\n'): break
-    print(f'Received HTTP_Request = {data}')
     return data
 
-def do_socket_logic():
-    """
-    Example function for some helper logic, in case you
-    want to be tidy and avoid stuffing the main function.
-
-    Feel free to delete this function.
-    """
-    pass
-
 def http_request_pipeline(source_addr, http_raw_data):
-    """
-    HTTP request processing pipeline.
-
-    - Parses the given HTTP request
-    - Validates it
-    - Returns a sanitized HttpRequestInfo or HttpErrorResponse
-        based on request validity.
-
-    returns:
-     HttpRequestInfo if the request was parsed correctly.
-     HttpErrorResponse if the request was invalid.
-
-    Please don't remove this function, but feel
-    free to change its content
-    """
     parsed = parse_http_request(source_addr, http_raw_data)
     request_status = check_http_request_validity(parsed)
     if is_valid_request(request_status):
@@ -185,75 +165,95 @@ def appropriate_response(request_status):
         return HttpErrorResponse(b'501', b'Method Not Implemented')
 
 def parse_http_request(source_addr, http_raw_data) -> HttpRequestInfo:
-    """
-    This function parses an HTTP request into an HttpRequestInfo
-    object.
-
-    it does NOT validate the HTTP request.
-    """
     http_request = http_raw_data.split(b'\r\n')[:-2]
     method, url = parse_request_line(http_request[0])
-    headers = parse_headers(http_request[1:])
-    ret = HttpRequestInfo(source_addr, method, url, None, None, headers)
+    headers = http_request[1:]
+    host_header = get_host_header(headers)
+    ret = HttpRequestInfo(source_addr, method, host_header, None, url, headers)
     return ret
 
 def parse_request_line(request_line):
     request_line = request_line.split(b' ')
     method = request_line[0]
-    url = request_line[1]
+    url = b''
+    for i in range(1, len(request_line)):
+        url += request_line[i] + b' '
+    # print(url)
     return method, url
 
-def parse_headers(request_headers):
-    headers = []
-    for header in request_headers:
-        header = header.split(b': ')
-        if header[0] == b'Host':
-            headers.insert(0, (header[0], header[1]))
-        else:
-            headers.append((header[0], header[1]))
-    return headers
+def get_host_header(headers):
+    host_header = None
+    for header in headers:
+        if header.lower().startswith(b'host'):
+            host_header = header
+            headers.remove(host_header)
+            break
+    # if host_header is not None: headers.remove(host_header)
+    return host_header
 
 def check_http_request_validity(http_request_info: HttpRequestInfo) -> HttpRequestState:
     not_supported = [b'PUT', b'PATCH', b'DELETE', b'HEAD', b'POST', b'CONNECT', b'OPTIONS', b'TRACE']
-    if http_request_info.method == b'GET':
-        return HttpRequestState.GOOD
+    # print(http_request_info.requested_path)
+    if (not http_request_info.requested_path.startswith(b'http') and not http_request_info.requested_path.startswith(b'/')) \
+            or (not http_request_info.requested_path.endswith(b' HTTP/1.0 ') and not http_request_info.requested_path.endswith(b' HTTP/1.1 ')):
+        return HttpRequestState.INVALID_INPUT
+    elif http_request_info.method != b'GET' and http_request_info.method not in not_supported:
+        return HttpRequestState.INVALID_INPUT
+    elif http_request_info.requested_host is None and http_request_info.requested_path.startswith(b'/'):
+        return HttpRequestState.INVALID_INPUT
+    # elif http_request_info.requested_host is None and http_request_info.requested_path.startswith(b'/'):
+        # return HttpRequestState.INVALID_INPUT
+    elif not is_correct_form(http_request_info.headers):
+        return HttpRequestState.INVALID_INPUT
     elif http_request_info.method in not_supported:
         return HttpRequestState.NOT_SUPPORTED
-    else:
-        return HttpRequestState.INVALID_INPUT
+    elif http_request_info.method == b'GET':
+        return HttpRequestState.GOOD
+
+def is_correct_form(headers):
+    for header in headers:
+        if len(header.split(b': ')) != 2: return false
+    return True
 
 def sanitize_http_request(request_info: HttpRequestInfo) -> HttpRequestInfo:
-    """
-    Puts an HTTP request on the sanitized (standard form)
-
-    returns: A modified object of the HttpRequestInfo with
-    sanitized fields
-
-    for example, expand a URL to relative path + Host header.
-    """
-    path = exapnd_url(request_info.requested_path)
-    host, port = expand_host(request_info.headers[0])
-    request_info.headers[0][1] = host
-    ret = HttpRequestInfo(request_info.client_address_info, request_info.method, host, port, path, request_info.headers)
+    path, host = expand_url(request_info.requested_path)
+    port = b'80'
+    if request_info.requested_host is not None:
+        host, port = expand_host(request_info.requested_host.split(b': ')[1])
+    # print(host)
+    headers = sanitize_headers(request_info.headers, host)
+    ret = HttpRequestInfo(request_info.client_address_info, request_info.method, host, port, path, headers)
     return ret
 
 def expand_url(requested_url):
+    requested_url = requested_url.rstrip().rstrip(b'HTTP/1.0').rstrip(b'HTTP/1.1')
+    requested_url = requested_url.rstrip()
     if requested_url.startswith(b'http'):
-        requested_url = url_or_path.lstrip(b'http://')
-        path = requested_url[requested_url.find(b'/'):]
+        requested_url = requested_url.lstrip(b'http://')
+        index = requested_url.find(b'/')
+        host = requested_url[:index]
+        # print(f'Host: {host}')
+        path = requested_url[index:]
     else:
+        host = None
         path = requested_url
-    return path
+    return path, host
 
 def expand_host(requested_host):
     host_parts = requested_host.split(b':')
     host = host_parts[0]
-    port = host_parts[1]
-    if port == b'':
-        port = b'80'
+    port = b'80'
+    if len(host_parts) == 2:
+        port = host_parts[1]
     return host, port
 
-
+def sanitize_headers(input_headers, host):
+    headers = []
+    for header in input_headers:
+        header = header.split(b': ')
+        headers.append((header[0], header[1]))
+    headers.append((b'Host', host))
+    return headers
 
 #######################################
 # Leave the code below as is.
