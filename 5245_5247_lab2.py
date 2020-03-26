@@ -88,9 +88,7 @@ def entry_point(proxy_port_number):
     proxy_as_server = setup_proxy_as_server(proxy_port_number)
     proxy_as_client = setup_proxy_as_client()
     client, address = connect_to_client(proxy_as_server)
-    # while True:
     http_raw_data = receive_from_client(client)
-    # print(f'Received request = {http_raw_data}')
     pipelined = http_request_pipeline(address, http_raw_data)
     if is_error_response(pipelined):
         response_string = pipelined.to_http_string()
@@ -99,18 +97,21 @@ def entry_point(proxy_port_number):
         host_path = (pipelined.requested_host, pipelined.requested_path)
         if host_path in cache:
             client.send(cache[host_path])
+            print('Cached version sent')
         else:
             print(pipelined.to_http_string())
             remote_address = get_remote_address(pipelined)
             connect_to_remote(proxy_as_client, remote_address)
             http_string = pipelined.to_http_string()
             send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
+            # print(f'Sended to remote: \n {pipelined.to_byte_array(http_string)}')
             response = receive_from_remote(proxy_as_client)
             print('Receieved from remote')
+            # print(f'Response is:\n {response}')
             cache[host_path] = response
             client.send(response)
-            # roxy_as_client.close()
-            # client.close()
+    proxy_as_client.close()
+    client.close()
     # return None // IS it good to put (return None) or just remove it and put return type beside the definition of method or not??????
 
 def setup_proxy_as_client():
@@ -131,9 +132,9 @@ def receive_from_remote(proxy):
     BUFF_SIZE = 4096
     data = b''
     while True:
-        part = proxy.recv(BUFF_SIZE)
-        data += part
-        if len(part) < BUFF_SIZE: break
+        chunk = proxy.recv(BUFF_SIZE)
+        data += chunk
+        if len(chunk) < BUFF_SIZE: break
     # return proxy.recvfrom(102400)[0]
     return data
 
@@ -158,8 +159,12 @@ def receive_from_client(client):
     data = b""
     while not data.endswith(b'\r\n\r\n'):
         data += client.recv(1024)
-        # if data.endswith(b'\r\n\r\n'): break
     return data
+    # while True:
+        # chunk = client.recv(4096)
+        # if not chunk: break
+        # data += chunk
+    # return data
 
 def http_request_pipeline(source_addr, http_raw_data):
     parsed = parse_http_request(source_addr, http_raw_data)
