@@ -5,6 +5,7 @@ import enum
 from socket import *
 import socket
 
+cache = {}
 
 class HttpRequestInfo(object):
     """
@@ -85,25 +86,31 @@ class HttpRequestState(enum.Enum):
 
 def entry_point(proxy_port_number):
     proxy_as_server = setup_proxy_as_server(proxy_port_number)
+    proxy_as_client = setup_proxy_as_client()
     client, address = connect_to_client(proxy_as_server)
+    # while True:
     http_raw_data = receive_from_client(client)
-    print(f'Received request = {http_raw_data}')
+    # print(f'Received request = {http_raw_data}')
     pipelined = http_request_pipeline(address, http_raw_data)
     if is_error_response(pipelined):
         response_string = pipelined.to_http_string()
         client.send(pipelined.to_byte_array(response_string))
     else:
-        print(f'Host_name: {pipelined.requested_host}')
-        print(pipelined.to_http_string())
-        proxy_as_client = setup_proxy_as_client()
-        remote_address = get_remote_address(pipelined)
-        connect_to_remote(proxy_as_client, remote_address)
-        http_string = pipelined.to_http_string()
-        send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
-        response = receive_from_remote(proxy_as_client)
-        print('Receieved from remote')
-        client.send(response)
-
+        host_path = (pipelined.requested_host, pipelined.requested_path)
+        if host_path in cache:
+            client.send(cache[host_path])
+        else:
+            print(pipelined.to_http_string())
+            remote_address = get_remote_address(pipelined)
+            connect_to_remote(proxy_as_client, remote_address)
+            http_string = pipelined.to_http_string()
+            send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
+            response = receive_from_remote(proxy_as_client)
+            print('Receieved from remote')
+            cache[host_path] = response
+            client.send(response)
+            # roxy_as_client.close()
+            # client.close()
     # return None // IS it good to put (return None) or just remove it and put return type beside the definition of method or not??????
 
 def setup_proxy_as_client():
@@ -121,17 +128,25 @@ def send_to_remote(proxy, http_request, remote_address):
     print('Sent to remote')
 
 def receive_from_remote(proxy):
-    return proxy.recvfrom(1024)[0]
+    BUFF_SIZE = 4096
+    data = b''
+    while True:
+        part = proxy.recv(BUFF_SIZE)
+        data += part
+        if len(part) < BUFF_SIZE: break
+    # return proxy.recvfrom(102400)[0]
+    return data
 
 def is_error_response(pipelined):
     return isinstance(pipelined, HttpErrorResponse)
 
 def setup_proxy_as_server(proxy_port_number):
     proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    address = (socket.gethostbyname('localhost'), int(proxy_port_number))
+    ip_address = '192.168.1.11'
+    address = (ip_address, int(proxy_port_number))
     proxy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     proxy.bind(address)
-    proxy.listen(20)
+    proxy.listen(100)
     return proxy
 
 def connect_to_client(proxy):
@@ -141,9 +156,9 @@ def connect_to_client(proxy):
 
 def receive_from_client(client):
     data = b""
-    while True:
+    while not data.endswith(b'\r\n\r\n'):
         data += client.recv(1024)
-        if data.endswith(b'\r\n\r\n'): break
+        # if data.endswith(b'\r\n\r\n'): break
     return data
 
 def http_request_pipeline(source_addr, http_raw_data):
@@ -178,7 +193,6 @@ def parse_request_line(request_line):
     url = b''
     for i in range(1, len(request_line)):
         url += request_line[i] + b' '
-    # print(url)
     return method, url
 
 def get_host_header(headers):
@@ -188,12 +202,10 @@ def get_host_header(headers):
             host_header = header
             headers.remove(host_header)
             break
-    # if host_header is not None: headers.remove(host_header)
     return host_header
 
 def check_http_request_validity(http_request_info: HttpRequestInfo) -> HttpRequestState:
     not_supported = [b'PUT', b'PATCH', b'DELETE', b'HEAD', b'POST', b'CONNECT', b'OPTIONS', b'TRACE']
-    # print(http_request_info.requested_path)
     if (not http_request_info.requested_path.startswith(b'http') and not http_request_info.requested_path.startswith(b'/')) \
             or (not http_request_info.requested_path.endswith(b' HTTP/1.0 ') and not http_request_info.requested_path.endswith(b' HTTP/1.1 ')):
         return HttpRequestState.INVALID_INPUT
@@ -201,9 +213,7 @@ def check_http_request_validity(http_request_info: HttpRequestInfo) -> HttpReque
         return HttpRequestState.INVALID_INPUT
     elif http_request_info.requested_host is None and http_request_info.requested_path.startswith(b'/'):
         return HttpRequestState.INVALID_INPUT
-    # elif http_request_info.requested_host is None and http_request_info.requested_path.startswith(b'/'):
-        # return HttpRequestState.INVALID_INPUT
-    elif not is_correct_form(http_request_info.headers):
+    elif http_request_info.requested_host is not None and not is_correct_host_header(http_request_info.requested_host) or not is_correct_form(http_request_info.headers):
         return HttpRequestState.INVALID_INPUT
     elif http_request_info.method in not_supported:
         return HttpRequestState.NOT_SUPPORTED
@@ -212,8 +222,11 @@ def check_http_request_validity(http_request_info: HttpRequestInfo) -> HttpReque
 
 def is_correct_form(headers):
     for header in headers:
-        if len(header.split(b': ')) != 2: return false
+        if len(header.split(b': ')) != 2: return False
     return True
+
+def is_correct_host_header(host_header):
+    return len(host_header.split(b': ')) > 1
 
 def sanitize_http_request(request_info: HttpRequestInfo) -> HttpRequestInfo:
     path, host = expand_url(request_info.requested_path)
@@ -252,7 +265,7 @@ def sanitize_headers(input_headers, host):
     for header in input_headers:
         header = header.split(b': ')
         headers.append((header[0], header[1]))
-    headers.append((b'Host', host))
+    headers.insert(0, (b'Host', host))
     return headers
 
 #######################################
@@ -311,7 +324,8 @@ def main():
 
     # This argument is optional, defaults to 18888
     proxy_port_number = get_arg(1, 18888)
-    entry_point(proxy_port_number)
+    while True:
+        entry_point(proxy_port_number)
 
 
 if __name__ == "__main__":
