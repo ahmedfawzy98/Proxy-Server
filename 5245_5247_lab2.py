@@ -95,21 +95,21 @@ def entry_point(proxy_port_number):
         client.send(pipelined.to_byte_array(response_string))
     else:
         host_path = (pipelined.requested_host, pipelined.requested_path)
-        if host_path in cache:
-            client.send(cache[host_path])
-            print('Cached version sent')
-        else:
-            print(pipelined.to_http_string())
-            remote_address = get_remote_address(pipelined)
-            connect_to_remote(proxy_as_client, remote_address)
-            http_string = pipelined.to_http_string()
-            send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
-            # print(f'Sended to remote: \n {pipelined.to_byte_array(http_string)}')
-            response = receive_from_remote(proxy_as_client)
-            print('Receieved from remote')
-            # print(f'Response is:\n {response}')
-            cache[host_path] = response
-            client.send(response)
+        # if host_path in cache:
+            # client.send(cache[host_path])
+            # print('Cached version sent')
+        # else:
+        print(pipelined.to_http_string())
+        remote_address = get_remote_address(pipelined)
+        connect_to_remote(proxy_as_client, remote_address)
+        http_string = pipelined.to_http_string()
+        send_to_remote(proxy_as_client, pipelined.to_byte_array(http_string), remote_address)
+        # print(f'Sended to remote: \n {pipelined.to_byte_array(http_string)}')
+        response = receive_from_remote(proxy_as_client)
+        print('Receieved from remote')
+        # print(f'Response is:\n {response}')
+        cache[host_path] = response
+        client.send(response)
     proxy_as_client.close()
     client.close()
     # return None // IS it good to put (return None) or just remove it and put return type beside the definition of method or not??????
@@ -135,8 +135,8 @@ def receive_from_remote(proxy):
         chunk = proxy.recv(BUFF_SIZE)
         data += chunk
         if len(chunk) < BUFF_SIZE: break
-    # return proxy.recvfrom(102400)[0]
     return data
+    # return proxy.recv(4096)
 
 def is_error_response(pipelined):
     return isinstance(pipelined, HttpErrorResponse)
@@ -160,11 +160,6 @@ def receive_from_client(client):
     while not data.endswith(b'\r\n\r\n'):
         data += client.recv(1024)
     return data
-    # while True:
-        # chunk = client.recv(4096)
-        # if not chunk: break
-        # data += chunk
-    # return data
 
 def http_request_pipeline(source_addr, http_raw_data):
     parsed = parse_http_request(source_addr, http_raw_data)
